@@ -15,13 +15,13 @@ echo "===================================================================="
 if command -v pkg &> /dev/null; then
     echo "[1/4] Setting up Termux packages & mobile GPU drivers..."
     pkg update -y
-    pkg install -y python python-numpy git curl ocl-icd opencl-vendor-driver
+    pkg install -y ca-certificates python python-numpy git curl ocl-icd opencl-vendor-driver
     pip install --upgrade pip --quiet 2>/dev/null || true
     pip install huggingface_hub gguf --quiet 2>/dev/null || true
 elif command -v apt-get &> /dev/null; then
     echo "[1/4] Setting up Linux packages..."
     sudo apt-get update -y
-    sudo apt-get install -y python3 python3-pip python3-numpy git curl
+    sudo apt-get install -y ca-certificates python3 python3-pip python3-numpy git curl
     pip3 install huggingface_hub gguf --quiet 2>/dev/null || true
 fi
 
@@ -55,7 +55,7 @@ if [ -d "$TARGET_DIR/.git" ]; then
     git pull --quiet
 else
     cd "$HOME"
-    git clone --quiet https://github.com/Phantom309-CED/GSD-LQ.git
+    git clone --depth 1 https://github.com/Phantom309-CED/GSD-LQ.git
 fi
 
 # 4. Launch Hardware Detection and Engine
