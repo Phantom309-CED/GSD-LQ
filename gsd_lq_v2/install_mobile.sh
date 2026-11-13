@@ -14,6 +14,12 @@ echo "===================================================================="
 # 1. Setup Termux or Linux environment
 if command -v pkg &> /dev/null; then
     echo "[1/4] Setting up Termux packages & mobile GPU drivers..."
+    # Ensure reliable DNS resolution in Termux
+    if [ -n "$PREFIX" ]; then
+        mkdir -p "$PREFIX/etc"
+        echo "nameserver 1.1.1.1" > "$PREFIX/etc/resolv.conf" 2>/dev/null || true
+        echo "nameserver 8.8.8.8" >> "$PREFIX/etc/resolv.conf" 2>/dev/null || true
+    fi
     pkg update -y
     pkg install -y ca-certificates python python-numpy git curl ocl-icd opencl-vendor-driver
     pip install --upgrade pip --quiet 2>/dev/null || true
