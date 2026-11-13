@@ -43,22 +43,50 @@ def ensure_model_file(model_path: str) -> str:
         model_path,
         os.path.join(V2_DIR, base_name),
         os.path.join(V2_DIR, "mistral_v2_native_turbo.gsd2"),
+        os.path.join(V2_DIR, "mistral_v2_native_precision.gsd2"),
         os.path.join(V2_DIR, "mistral_v2_native_hex2d.gsd2"),
     ]
     for c in candidates:
         if os.path.exists(c):
             return c
 
+    target_file = base_name if base_name.endswith(".gsd2") else "mistral_v2_native_turbo.gsd2"
+    if target_file not in ("mistral_v2_native_turbo.gsd2", "mistral_v2_native_precision.gsd2"):
+        target_file = "mistral_v2_native_turbo.gsd2"
+
     print("\n" + "=" * 84)
-    print("GSD-LQ v2.0: MODEL BINARY NOT FOUND")
+    print("GSD-LQ v2.0: AUTO-DOWNLOADING VERIFIED WEIGHTS FROM HUGGING FACE")
     print("=" * 84)
-    print(f"Target model binary '{base_name}' was not detected in this directory.")
-    print("\nDownload the official verified .gsd2 weights from Hugging Face:")
-    print("  Repository: https://huggingface.co/PhantomLatticeLabs/Mistral-7B-Instruct-v0.3-GSD-LQ")
-    print("\nPlace the downloaded .gsd2 file inside the gsd_lq_v2 folder, or pass its path directly:")
-    print("  python run_gpu_native_chat.py <path_to_file.gsd2>")
+    print(f"File:       {target_file} (~3.79 GB, 100% Resident GPU VRAM)")
+    print("Repository: https://huggingface.co/PhantomLatticeLabs/Mistral-7B-Instruct-v0.3-GSD-LQ")
     print("=" * 84 + "\n")
-    sys.exit(1)
+
+    try:
+        from huggingface_hub import hf_hub_download
+        print("Connecting to Hugging Face Hub...")
+        downloaded = hf_hub_download(
+            repo_id="PhantomLatticeLabs/Mistral-7B-Instruct-v0.3-GSD-LQ",
+            filename=target_file,
+            local_dir=V2_DIR,
+        )
+        print(f"\n[OK] Model successfully downloaded: {downloaded}\n")
+        return downloaded
+    except Exception as e:
+        print(f"\n[!] Hugging Face Hub download fallback: {e}")
+        import urllib.request
+        url = f"https://huggingface.co/PhantomLatticeLabs/Mistral-7B-Instruct-v0.3-GSD-LQ/resolve/main/{target_file}"
+        dest = os.path.join(V2_DIR, target_file)
+        print(f"Streaming from: {url}")
+        def _reporthook(block_num, block_size, total_size):
+            downloaded_bytes = block_num * block_size
+            if total_size > 0:
+                pct = downloaded_bytes / total_size * 100
+                mb = downloaded_bytes / (1024 * 1024)
+                total_mb = total_size / (1024 * 1024)
+                print(f"\rProgress: {pct:5.1f}% [{mb:6.1f} MB / {total_mb:6.1f} MB]", end="", flush=True)
+        urllib.request.urlretrieve(url, dest, reporthook=_reporthook)
+        print(f"\n[OK] Download complete: {dest}\n")
+        return dest
 LOG_FILE = os.path.join(V2_DIR, "GPU_NATIVE_CHAT_LOG.md")
 
 CL_DEVICE_TYPE_GPU = 1 << 2
