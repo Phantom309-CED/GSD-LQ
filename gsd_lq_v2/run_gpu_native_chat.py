@@ -32,7 +32,33 @@ def _get_turbo_codebook(radius: int = 8):
                 xy_pts.append([r0 + 0.5 * r1, r1 * sqrt3_2])
     return np.array(xy_pts, dtype=np.float32), len(xy_pts)
 
-MODEL_PATH = sys.argv[1] if len(sys.argv) > 1 else os.path.join(V2_DIR, "mistral_v2_native_hex2d.gsd2")
+MODEL_PATH = sys.argv[1] if len(sys.argv) > 1 else os.path.join(V2_DIR, "mistral_v2_native_turbo.gsd2")
+
+def ensure_model_file(model_path: str) -> str:
+    if os.path.exists(model_path):
+        return model_path
+
+    base_name = os.path.basename(model_path)
+    candidates = [
+        model_path,
+        os.path.join(V2_DIR, base_name),
+        os.path.join(V2_DIR, "mistral_v2_native_turbo.gsd2"),
+        os.path.join(V2_DIR, "mistral_v2_native_hex2d.gsd2"),
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+
+    print("\n" + "=" * 84)
+    print("GSD-LQ v2.0: MODEL BINARY NOT FOUND")
+    print("=" * 84)
+    print(f"Target model binary '{base_name}' was not detected in this directory.")
+    print("\nDownload the official verified .gsd2 weights from Hugging Face:")
+    print("  Repository: https://huggingface.co/PhantomLatticeLabs/Mistral-7B-Instruct-v0.3-GSD-LQ")
+    print("\nPlace the downloaded .gsd2 file inside the gsd_lq_v2 folder, or pass its path directly:")
+    print("  python run_gpu_native_chat.py <path_to_file.gsd2>")
+    print("=" * 84 + "\n")
+    sys.exit(1)
 LOG_FILE = os.path.join(V2_DIR, "GPU_NATIVE_CHAT_LOG.md")
 
 CL_DEVICE_TYPE_GPU = 1 << 2
@@ -369,28 +395,92 @@ __kernel void swiglu_mul_kernel(__global const float* gate, __global const float
 
 class OpenCLRuntime:
     def __init__(self):
-        self.cl = ctypes.WinDLL("OpenCL.dll")
+        # 1. Cross-platform OpenCL driver loader
+        cl_lib = None
+        candidates = []
+        if sys.platform == "win32":
+            candidates = ["OpenCL.dll"]
+        elif sys.platform == "darwin":
+            candidates = ["/System/Library/Frameworks/OpenCL.framework/OpenCL"]
+        else:
+            candidates = ["libOpenCL.so.1", "libOpenCL.so"]
+
+        for cand in candidates:
+            try:
+                cl_lib = ctypes.WinDLL(cand) if sys.platform == "win32" else ctypes.CDLL(cand)
+                break
+            except Exception:
+                continue
+
+        if cl_lib is None:
+            print("\n[!] ERROR: Could not locate OpenCL GPU driver.")
+            print("    Please ensure your NVIDIA, AMD, or Intel graphics drivers are installed and up to date.")
+            sys.exit(1)
+
+        self.cl = cl_lib
         self._bind_api()
 
-        n_plat = ctypes.c_uint()
+        # 2. Enumerate all OpenCL platforms and find every GPU
+        n_plat = ctypes.c_uint(0)
         self.cl.clGetPlatformIDs(0, None, ctypes.byref(n_plat))
+        if n_plat.value == 0:
+            print("\n[!] ERROR: No OpenCL platforms detected on this system.")
+            print("    Please install GPU display drivers with OpenCL support.")
+            sys.exit(1)
+
         plats = (ctypes.c_void_p * n_plat.value)()
         self.cl.clGetPlatformIDs(n_plat.value, plats, None)
 
-        devs = (ctypes.c_void_p * 4)()
-        n_dev = ctypes.c_uint()
-        err = self.cl.clGetDeviceIDs(plats[0], CL_DEVICE_TYPE_GPU, 4, devs, ctypes.byref(n_dev))
-        if err != 0 or n_dev.value == 0:
-            raise RuntimeError(f"No OpenCL GPU found (err={err})")
-        self.device = devs[0]
+        discovered_gpus = []
+        for p_idx in range(n_plat.value):
+            p = plats[p_idx]
+            pname_buf = ctypes.create_string_buffer(256)
+            self.cl.clGetPlatformInfo(p, 0x0902, 256, pname_buf, None)
+            pname = pname_buf.value.decode("utf-8", errors="replace").strip()
 
-        buf = ctypes.create_string_buffer(256)
-        self.cl.clGetDeviceInfo(self.device, 0x102B, 256, buf, None)
-        self.device_name = buf.value.decode("utf-8", errors="replace")
+            n_dev = ctypes.c_uint(0)
+            err = self.cl.clGetDeviceIDs(p, CL_DEVICE_TYPE_GPU, 0, None, ctypes.byref(n_dev))
+            if err == 0 and n_dev.value > 0:
+                dev_arr = (ctypes.c_void_p * n_dev.value)()
+                self.cl.clGetDeviceIDs(p, CL_DEVICE_TYPE_GPU, n_dev.value, dev_arr, None)
+                for d_idx in range(n_dev.value):
+                    d = dev_arr[d_idx]
+                    dname_buf = ctypes.create_string_buffer(256)
+                    self.cl.clGetDeviceInfo(d, 0x102B, 256, dname_buf, None)
+                    dname = dname_buf.value.decode("utf-8", errors="replace").strip()
 
-        mem = ctypes.c_ulonglong()
-        self.cl.clGetDeviceInfo(self.device, 0x101F, 8, ctypes.byref(mem), None)
-        self.total_vram_mb = mem.value / (1024 * 1024)
+                    mem_val = ctypes.c_ulonglong(0)
+                    self.cl.clGetDeviceInfo(d, 0x101F, 8, ctypes.byref(mem_val), None)
+                    vram_mb = mem_val.value / (1024 * 1024)
+
+                    discovered_gpus.append({
+                        "platform": p,
+                        "platform_name": pname,
+                        "device": d,
+                        "device_name": dname,
+                        "vram_mb": vram_mb,
+                    })
+
+        if not discovered_gpus:
+            print("\n[!] ERROR: No OpenCL-compatible GPU detected.")
+            print("    A dedicated GPU (AMD Radeon, NVIDIA GeForce/RTX, or Intel Arc) with OpenCL 1.2+ is required.")
+            sys.exit(1)
+
+        # Automatically select the GPU with the highest VRAM (prefers discrete cards over integrated)
+        discovered_gpus.sort(key=lambda x: x["vram_mb"], reverse=True)
+        selected = discovered_gpus[0]
+        self.platform = selected["platform"]
+        self.device = selected["device"]
+        self.device_name = selected["device_name"]
+        self.total_vram_mb = selected["vram_mb"]
+
+        print("=" * 84)
+        print("GSD-LQ v2.0 HARDWARE DETECTION")
+        print(f"Discovered {len(discovered_gpus)} OpenCL GPU(s):\n")
+        for idx, g in enumerate(discovered_gpus):
+            tag = "-> SELECTED (Primary Engine)" if idx == 0 else ""
+            print(f"  [{idx + 1}] {g['device_name']} ({g['vram_mb']:.0f} MB VRAM, Platform: {g['platform_name']}) {tag}")
+        print("=" * 84)
 
         err_c = ctypes.c_int()
         self.ctx = self.cl.clCreateContext(None, 1, ctypes.byref(ctypes.c_void_p(self.device)), None, None, ctypes.byref(err_c))
@@ -423,6 +513,7 @@ class OpenCLRuntime:
         c = self.cl
         vp, u32, i32, u64, sz = ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulonglong, ctypes.c_size_t
         c.clGetPlatformIDs.argtypes = [u32, ctypes.POINTER(vp), ctypes.POINTER(u32)]
+        c.clGetPlatformInfo.argtypes = [vp, u32, sz, vp, ctypes.POINTER(sz)]
         c.clGetDeviceIDs.argtypes = [vp, u64, u32, ctypes.POINTER(vp), ctypes.POINTER(u32)]
         c.clGetDeviceInfo.argtypes = [vp, u32, sz, vp, ctypes.POINTER(sz)]
         c.clCreateContext.argtypes = [vp, u32, ctypes.POINTER(vp), vp, vp, ctypes.POINTER(i32)]
@@ -905,7 +996,8 @@ def main():
         m.cl.release_all()
         return
 
-    model = GPUMistralV2Model(MODEL_PATH, rope_interleaved=1)
+    model_file = ensure_model_file(MODEL_PATH)
+    model = GPUMistralV2Model(model_file, rope_interleaved=1)
     ensure_log_header(model.vram_used_mb, model.cl.total_vram_mb, model.avg_bpw)
 
     print("=" * 84)
