@@ -13,9 +13,9 @@ echo "===================================================================="
 
 # 1. Setup Termux or Linux environment
 if command -v pkg &> /dev/null; then
-    echo "[1/4] Setting up Termux packages..."
+    echo "[1/4] Setting up Termux packages & mobile GPU drivers..."
     pkg update -y
-    pkg install -y python python-numpy git curl
+    pkg install -y python python-numpy git curl ocl-icd opencl-vendor-driver
     pip install --upgrade pip --quiet 2>/dev/null || true
     pip install huggingface_hub gguf --quiet 2>/dev/null || true
 elif command -v apt-get &> /dev/null; then
