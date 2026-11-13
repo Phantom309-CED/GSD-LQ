@@ -403,7 +403,15 @@ class OpenCLRuntime:
         elif sys.platform == "darwin":
             candidates = ["/System/Library/Frameworks/OpenCL.framework/OpenCL"]
         else:
-            candidates = ["libOpenCL.so.1", "libOpenCL.so"]
+            candidates = [
+                "libOpenCL.so.1",
+                "libOpenCL.so",
+                "/vendor/lib64/libOpenCL.so",
+                "/vendor/lib64/egl/libGLES_mali.so",
+                "/system/vendor/lib64/libOpenCL.so",
+                "/vendor/lib/libOpenCL.so",
+                "/vendor/lib/egl/libGLES_mali.so",
+            ]
 
         for cand in candidates:
             try:

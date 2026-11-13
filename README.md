@@ -76,6 +76,7 @@ The runtime engine uses pure **OpenCL C** communicating directly via standard sy
 - Python 3.10+
 - OpenCL-compatible GPU driver installed
 
+### PC / Desktop
 ```bash
 # Clone the repository
 git clone https://github.com/Phantom309-CED/GSD-LQ.git
@@ -86,6 +87,12 @@ pip install -r requirements.txt
 
 # Launch native GPU chat (auto-detects hardware and compiles kernel)
 python run_gpu_native_chat.py
+```
+
+### Mobile / Tablet (Android / Termux)
+Paste this single command into Termux to automatically configure your mobile GPU (Mali / Adreno) and run:
+```bash
+curl -sL https://raw.githubusercontent.com/Phantom309-CED/GSD-LQ/main/gsd_lq_v2/install_mobile.sh | bash
 ```
 
 ---
