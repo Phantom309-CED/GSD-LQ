@@ -431,7 +431,11 @@ class OpenCLRuntime:
         elif sys.platform == "darwin":
             candidates = ["/System/Library/Frameworks/OpenCL.framework/OpenCL"]
         else:
+            prefix = os.environ.get("PREFIX", "/data/data/com.termux/files/usr")
             candidates = [
+                os.path.join(prefix, "opt", "vendor", "lib", "libOpenCL.so"),
+                os.path.join(prefix, "lib", "libOpenCL.so"),
+                os.path.join(prefix, "lib", "libOpenCL.so.1"),
                 "libOpenCL.so.1",
                 "libOpenCL.so",
                 "/vendor/lib64/libOpenCL.so",
