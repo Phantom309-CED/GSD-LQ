@@ -530,13 +530,40 @@ class OpenCLRuntime:
         src_ptr = ctypes.c_char_p(src_bytes)
         src_len = ctypes.c_size_t(len(src_bytes))
         self.program = self.cl.clCreateProgramWithSource(self.ctx, 1, ctypes.byref(src_ptr), ctypes.byref(src_len), ctypes.byref(err_c))
-        err = self.cl.clBuildProgram(self.program, 1, ctypes.byref(ctypes.c_void_p(self.device)), b"-cl-fast-relaxed-math", None, None)
-        if err != 0:
-            log_size = ctypes.c_size_t()
+        # Check compiler availability
+        comp_avail = ctypes.c_uint(1)
+        self.cl.clGetDeviceInfo(self.device, 0x1028, ctypes.sizeof(comp_avail), ctypes.byref(comp_avail), None)
+        if comp_avail.value == 0:
+            print("[!] Warning: Driver reports CL_DEVICE_COMPILER_AVAILABLE = False (online C compiler omitted by vendor).")
+
+        # Try building with fast-math first, fallback to standard or empty options
+        build_options_list = [b"-cl-fast-relaxed-math", b"-cl-mad-enable", b"", None]
+        build_err = None
+        for opt in build_options_list:
+            err = self.cl.clBuildProgram(self.program, 1, ctypes.byref(ctypes.c_void_p(self.device)), opt, None, None)
+            if err == 0:
+                build_err = 0
+                break
+            build_err = err
+
+        if build_err != 0:
+            log_size = ctypes.c_size_t(0)
             self.cl.clGetProgramBuildInfo(self.program, self.device, 0x1183, 0, None, ctypes.byref(log_size))
-            log_buf = ctypes.create_string_buffer(log_size.value)
-            self.cl.clGetProgramBuildInfo(self.program, self.device, 0x1183, log_size.value, log_buf, None)
-            raise RuntimeError(f"OpenCL Build Failed ({err}):\n{log_buf.value.decode()}")
+            if log_size.value > 0:
+                log_buf = ctypes.create_string_buffer(log_size.value)
+                self.cl.clGetProgramBuildInfo(self.program, self.device, 0x1183, log_size.value, log_buf, None)
+                log_str = log_buf.value.decode(errors="replace")
+            else:
+                log_str = "(no build log emitted by driver)"
+
+            if build_err == -3:
+                raise RuntimeError(
+                    f"OpenCL Build Failed (-3: CL_COMPILER_NOT_AVAILABLE):\n"
+                    f"The device '{self.device_name}' does not include an online OpenCL C compiler frontend in its vendor Android image.\n"
+                    f"OEMs (including Google Tensor / PowerVR) strip the on-device compiler for binary-only execution.\n"
+                    f"Details: {log_str}"
+                )
+            raise RuntimeError(f"OpenCL Build Failed ({build_err}):\n{log_str}")
 
         self.k_rmsnorm = self.cl.clCreateKernel(self.program, b"rmsnorm_kernel", ctypes.byref(err_c))
         self.k_lowrank = self.cl.clCreateKernel(self.program, b"gsd_lowrank_proj", ctypes.byref(err_c))
