@@ -138,72 +138,71 @@ class CPUMistralV2Model:
             self.n_heads = self.cfg["n_heads"]
             self.n_kv_heads = self.cfg["n_kv_heads"]
             self.head_dim = self.cfg["head_dim"]
-            self.ffn_size = self.cfg["intermediate_size"]
-            self.rms_eps = self.cfg["rms_norm_eps"]
-            self.rope_theta = self.cfg.get("rope_theta", 1000000.0)
+            self.ffn_size = self.cfg["ffn_size"]
+            self.rms_eps = self.cfg["rms_eps"]
+            self.rope_theta = self.cfg["rope_theta"]
             self.vocab_size = self.cfg["vocab_size"]
+            self.avg_bpw = header.get("avg_bpw", 3.79)
+
+            from run_gpu_native_chat import MistralSentencePieceTokenizer
+            self.tokenizer = MistralSentencePieceTokenizer(
+                self.cfg["tokens"], self.cfg["scores"], self.cfg["token_types"],
+                self.cfg["bos_id"], self.cfg["eos_id"]
+            )
 
             tensors = header["tensors"]
-            total_bytes = 0
-            for t_info in tensors.values():
-                d = t_info["data"]
-                total_bytes += d["length"]
-            self.avg_bpw = (total_bytes * 8) / (7.24e9)
 
-            def read_blob(meta):
+            def read_blob(meta: dict) -> bytes:
                 f.seek(data_base + meta["offset"])
-                return f.read(meta["length"])
+                return f.read(meta["nbytes"])
 
-            # Tokenizer setup
-            from run_gpu_native_chat import MistralTokenizer
-            self.tokenizer = MistralTokenizer(gsd2_path)
+            # Token embeddings
+            emb_meta = tensors["token_embd.weight"]["data"]
+            self.embed = np.frombuffer(read_blob(emb_meta), dtype=np.float16).astype(np.float32).reshape(emb_meta["shape"])
 
-            # Embeddings
-            emb_bytes = read_blob(tensors["token_embd.weight"]["data"])
-            self.embed = np.frombuffer(emb_bytes, dtype=np.float16).astype(np.float32).reshape(self.vocab_size, self.hidden)
+            # Codebook tables
+            self.xy_tables = {}
+            for r in (6, 8):
+                table_pts, num_pts = _get_turbo_codebook(r)
+                self.xy_tables[r] = (np.ascontiguousarray(table_pts, dtype=np.float32), int(num_pts))
 
-            # Codebook table
-            xy_table_arr, n_pts = _get_turbo_codebook(6)
-            self.xy_table = np.ascontiguousarray(xy_table_arr, dtype=np.float32)
-            self.n_pts = n_pts
+            self.dummy_u16 = np.zeros(2, dtype=np.uint16)
+            self.dummy_f32 = np.zeros(1, dtype=np.float32)
 
-            def load_hex_cpu(prefix):
-                sh = tensors[f"{prefix}.codes"]["shape"]
-                rows, cols = sh[0], sh[1]
-                k_dim = tensors[f"{prefix}.k_dim"]["k_dim"]
-
-                codes = np.frombuffer(read_blob(tensors[f"{prefix}.codes"]["data"]), dtype=np.uint8)
-                scales = np.frombuffer(read_blob(tensors[f"{prefix}.scales"]["data"]), dtype=np.uint16)
-
+            def load_hex_cpu(tname: str) -> dict:
+                m = tensors[tname]
+                r = m["radius"]
+                xy_table, n_pts = self.xy_tables[r]
+                k_dim = m["k_dim"]
                 if k_dim > 0:
-                    U = np.frombuffer(read_blob(tensors[f"{prefix}.U"]["data"]), dtype=np.uint16)
-                    S = np.frombuffer(read_blob(tensors[f"{prefix}.S"]["data"]), dtype=np.uint16)
-                    Vt = np.frombuffer(read_blob(tensors[f"{prefix}.Vt"]["data"]), dtype=np.uint16)
+                    U = np.frombuffer(read_blob(m["U"]), dtype=np.uint16)
+                    S = np.frombuffer(read_blob(m["S"]), dtype=np.float32)
+                    Vt = np.frombuffer(read_blob(m["Vt"]), dtype=np.uint16)
                 else:
-                    U, S, Vt = np.zeros(1, dtype=np.uint16), np.zeros(1, dtype=np.uint16), np.zeros(1, dtype=np.uint16)
-
-                row_ptr = np.frombuffer(read_blob(tensors[f"{prefix}.kink_row_ptr"]["data"]), dtype=np.uint32)
-                kink_cols = np.frombuffer(read_blob(tensors[f"{prefix}.kink_cols"]["data"]), dtype=np.uint16)
-                kink_deltas = np.frombuffer(read_blob(tensors[f"{prefix}.kink_deltas"]["data"]), dtype=np.float32)
-
+                    U = Vt = self.dummy_u16
+                    S = self.dummy_f32
                 return {
-                    "rows": rows, "cols": cols, "k_dim": k_dim, "n_pts": n_pts,
-                    "codes": np.ascontiguousarray(codes),
-                    "scales": np.ascontiguousarray(scales),
-                    "U": np.ascontiguousarray(U),
-                    "S": np.ascontiguousarray(S),
-                    "Vt": np.ascontiguousarray(Vt),
-                    "row_ptr": np.ascontiguousarray(row_ptr),
-                    "kink_cols": np.ascontiguousarray(kink_cols),
-                    "kink_deltas": np.ascontiguousarray(kink_deltas),
+                    "rows": m["rows"],
+                    "cols": m["cols"],
+                    "k_dim": k_dim,
+                    "n_pts": n_pts,
+                    "xy_table": xy_table,
+                    "codes": np.frombuffer(read_blob(m["codes"]), dtype=np.uint8),
+                    "scales": np.frombuffer(read_blob(m["scales"]), dtype=np.uint16),
+                    "U": U,
+                    "S": S,
+                    "Vt": Vt,
+                    "row_ptr": np.frombuffer(read_blob(m["row_ptr"]), dtype=np.uint32),
+                    "kink_cols": np.frombuffer(read_blob(m["kink_cols"]), dtype=np.uint16),
+                    "kink_deltas": np.frombuffer(read_blob(m["kink_deltas"]), dtype=np.float32),
                 }
 
             self.layers = []
             for l in range(self.n_layers):
                 p = f"blk.{l}."
                 self.layers.append({
-                    "attn_norm": np.frombuffer(read_blob(tensors[p + "attn_norm.weight"]["data"]), dtype=np.uint16),
-                    "ffn_norm": np.frombuffer(read_blob(tensors[p + "ffn_norm.weight"]["data"]), dtype=np.uint16),
+                    "attn_norm": np.frombuffer(read_blob(tensors[p + "attn_norm.weight"]["data"]), dtype=np.float32),
+                    "ffn_norm": np.frombuffer(read_blob(tensors[p + "ffn_norm.weight"]["data"]), dtype=np.float32),
                     "q": load_hex_cpu(p + "attn_q.weight"),
                     "k": load_hex_cpu(p + "attn_k.weight"),
                     "v": load_hex_cpu(p + "attn_v.weight"),
@@ -213,7 +212,7 @@ class CPUMistralV2Model:
                     "down": load_hex_cpu(p + "ffn_down.weight"),
                 })
 
-            self.final_norm = np.frombuffer(read_blob(tensors["output_norm.weight"]["data"]), dtype=np.uint16)
+            self.final_norm = np.frombuffer(read_blob(tensors["output_norm.weight"]["data"]), dtype=np.float32)
             self.lm_head = load_hex_cpu("output.weight")
 
         # KV Cache & Scratchpad Buffers
@@ -231,10 +230,10 @@ class CPUMistralV2Model:
         self.buf_tmp_k = np.zeros(16, dtype=np.float32)
         self.buf_logits = np.zeros(self.vocab_size, dtype=np.float32)
 
-        self.ram_used_mb = (total_bytes + self.embed.nbytes + self.k_cache.nbytes * 2) / (1024 * 1024)
+        file_size_mb = os.path.getsize(gsd2_path) / (1024 * 1024)
         print(
             f"[+] GSD-LQ Model Loaded 100% in RAM in {time.time() - t0:.2f}s!\n"
-            f"    Unified Memory Footprint: {self.ram_used_mb:.1f} MB ({self.ram_used_mb / 1024:.2f} GB)\n"
+            f"    Unified Memory Footprint: {file_size_mb:.1f} MB ({file_size_mb / 1024:.2f} GB)\n"
             f"    Effective Quantization:  {self.avg_bpw:.2f} bpw",
             flush=True,
         )
@@ -257,7 +256,7 @@ class CPUMistralV2Model:
                 self._ptr(x),
                 self._ptr(lyr["codes"]),
                 self._ptr(lyr["scales"]),
-                self._ptr(self.xy_table),
+                self._ptr(lyr["xy_table"]),
                 self._ptr(lyr["U"]),
                 self._ptr(self.buf_tmp_k),
                 self._ptr(lyr["row_ptr"]),
@@ -273,7 +272,7 @@ class CPUMistralV2Model:
             # Vectorized NumPy Fallback
             rows, cols = lyr["rows"], lyr["cols"]
             scales_f32 = lyr["scales"].view(np.float16).astype(np.float32)
-            pts = self.xy_table[lyr["codes"]].reshape(rows, cols)
+            pts = lyr["xy_table"][lyr["codes"]].reshape(rows, cols)
             scales_expanded = np.repeat(scales_f32.reshape(rows, cols // 64), 64, axis=1)
             W = pts * scales_expanded
             res = W @ x
@@ -288,7 +287,7 @@ class CPUMistralV2Model:
             # Lowrank
             if lyr["k_dim"] > 0:
                 U = lyr["U"].view(np.float16).astype(np.float32).reshape(rows, lyr["k_dim"])
-                S = lyr["S"].view(np.float16).astype(np.float32)
+                S = lyr["S"]
                 Vt = lyr["Vt"].view(np.float16).astype(np.float32).reshape(lyr["k_dim"], cols)
                 res += U @ (S * (Vt @ x))
             np.copyto(out, res)
@@ -307,7 +306,7 @@ class CPUMistralV2Model:
                 )
             else:
                 scale = 1.0 / np.sqrt(np.mean(self.buf_x ** 2) + self.rms_eps)
-                self.buf_xb[:] = self.buf_x * scale * lyr["attn_norm"].view(np.float16).astype(np.float32)
+                self.buf_xb[:] = self.buf_x * scale * lyr["attn_norm"]
 
             # 2. Q, K, V
             self._matvec_cpu(self.buf_xb, lyr["q"], self.buf_q)
@@ -379,7 +378,7 @@ class CPUMistralV2Model:
                 )
             else:
                 scale = 1.0 / np.sqrt(np.mean(self.buf_x ** 2) + self.rms_eps)
-                self.buf_xb[:] = self.buf_x * scale * lyr["ffn_norm"].view(np.float16).astype(np.float32)
+                self.buf_xb[:] = self.buf_x * scale * lyr["ffn_norm"]
 
             # 7. SwiGLU MLP
             self._matvec_cpu(self.buf_xb, lyr["gate"], self.buf_gate)
@@ -408,7 +407,7 @@ class CPUMistralV2Model:
             )
         else:
             scale = 1.0 / np.sqrt(np.mean(self.buf_x ** 2) + self.rms_eps)
-            self.buf_xb[:] = self.buf_x * scale * self.final_norm.view(np.float16).astype(np.float32)
+            self.buf_xb[:] = self.buf_x * scale * self.final_norm
 
         self._matvec_cpu(self.buf_xb, self.lm_head, self.buf_logits)
         return self.buf_logits.copy()

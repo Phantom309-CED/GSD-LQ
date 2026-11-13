@@ -60,7 +60,7 @@ static inline float fp16_to_fp32(uint16_t h) {
 // 1. RMSNorm
 void gsd_cpu_rmsnorm(
     const float* x,
-    const uint16_t* weight_fp16,
+    const float* weight,
     float* out,
     int dim,
     float eps
@@ -71,7 +71,7 @@ void gsd_cpu_rmsnorm(
     }
     float scale = 1.0f / sqrtf((sum_sq / (float)dim) + eps);
     for (int i = 0; i < dim; i++) {
-        out[i] = x[i] * scale * fp16_to_fp32(weight_fp16[i]);
+        out[i] = x[i] * scale * weight[i];
     }
 }
 
@@ -105,7 +105,7 @@ void gsd_cpu_swiglu(
 void gsd_cpu_lowrank_proj(
     const float* x,
     const uint16_t* Vt,
-    const uint16_t* S,
+    const float* S,
     float* tmp_k,
     int k_dim,
     int cols
@@ -116,7 +116,7 @@ void gsd_cpu_lowrank_proj(
         for (int c = 0; c < cols; c++) {
             dot += x[c] * fp16_to_fp32(Vt[row_offset + c]);
         }
-        tmp_k[j] = dot * fp16_to_fp32(S[j]);
+        tmp_k[j] = dot * S[j];
     }
 }
 
