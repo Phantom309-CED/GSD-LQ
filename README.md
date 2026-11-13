@@ -66,7 +66,7 @@ The runtime engine uses pure **OpenCL C** communicating directly via standard sy
 - **AMD Radeon**: RX 5000, 6000, 7000 series, and APUs.
 - **Nvidia GeForce / RTX**: GTX 10-series through RTX 40-series.
 - **Intel**: Arc Discrete GPUs and Iris Xe integrated graphics.
-- **Apple Silicon / Mobile**: Qualcomm Adreno and ARM Mali OpenCL runtimes.
+- **Apple Silicon & Mobile**: Metal (macOS) and Vulkan / ARM NEON (Android) scheduled for upcoming v2.1 release.
 
 ---
 
@@ -76,7 +76,10 @@ The runtime engine uses pure **OpenCL C** communicating directly via standard sy
 - Python 3.10+
 - OpenCL-compatible GPU driver installed
 
-### PC / Desktop
+### 1-Click Launch (Windows)
+Double-click `START_GPU_NATIVE_CHAT.bat` in the repository folder.
+
+### Manual / Terminal (Linux & Windows)
 ```bash
 # Clone the repository
 git clone https://github.com/Phantom309-CED/GSD-LQ.git
@@ -87,12 +90,6 @@ pip install -r requirements.txt
 
 # Launch native GPU chat (auto-detects hardware and compiles kernel)
 python run_gpu_native_chat.py
-```
-
-### Mobile / Tablet (Android / Termux)
-Paste this single command into Termux to automatically configure your mobile GPU (Mali / Adreno) and run:
-```bash
-curl -sL https://raw.githubusercontent.com/Phantom309-CED/GSD-LQ/main/gsd_lq_v2/install_mobile.sh | bash
 ```
 
 ---
