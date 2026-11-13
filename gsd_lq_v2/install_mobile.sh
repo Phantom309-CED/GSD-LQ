@@ -21,7 +21,7 @@ if command -v pkg &> /dev/null; then
         echo "nameserver 8.8.8.8" >> "$PREFIX/etc/resolv.conf" 2>/dev/null || true
     fi
     pkg update -y
-    pkg install -y ca-certificates python python-numpy git curl ocl-icd opencl-vendor-driver
+    pkg install -y ca-certificates python python-numpy clang git curl ocl-icd opencl-vendor-driver
     pip install --upgrade pip --quiet 2>/dev/null || true
     pip install huggingface_hub gguf --quiet 2>/dev/null || true
 elif command -v apt-get &> /dev/null; then

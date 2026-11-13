@@ -453,9 +453,7 @@ class OpenCLRuntime:
                 continue
 
         if cl_lib is None:
-            print("\n[!] ERROR: Could not locate OpenCL GPU driver.")
-            print("    Please ensure your NVIDIA, AMD, or Intel graphics drivers are installed and up to date.")
-            sys.exit(1)
+            raise RuntimeError("Could not locate OpenCL GPU driver on this system.")
 
         self.cl = cl_lib
         self._bind_api()
@@ -464,9 +462,7 @@ class OpenCLRuntime:
         n_plat = ctypes.c_uint(0)
         self.cl.clGetPlatformIDs(0, None, ctypes.byref(n_plat))
         if n_plat.value == 0:
-            print("\n[!] ERROR: No OpenCL platforms detected on this system.")
-            print("    Please install GPU display drivers with OpenCL support.")
-            sys.exit(1)
+            raise RuntimeError("No OpenCL platforms detected on this system.")
 
         plats = (ctypes.c_void_p * n_plat.value)()
         self.cl.clGetPlatformIDs(n_plat.value, plats, None)
@@ -502,9 +498,7 @@ class OpenCLRuntime:
                     })
 
         if not discovered_gpus:
-            print("\n[!] ERROR: No OpenCL-compatible GPU detected.")
-            print("    A dedicated GPU (AMD Radeon, NVIDIA GeForce/RTX, or Intel Arc) with OpenCL 1.2+ is required.")
-            sys.exit(1)
+            raise RuntimeError("No OpenCL-compatible GPU detected on this system.")
 
         # Automatically select the GPU with the highest VRAM (prefers discrete cards over integrated)
         discovered_gpus.sort(key=lambda x: x["vram_mb"], reverse=True)
@@ -1064,11 +1058,21 @@ def main():
         return
 
     model_file = ensure_model_file(MODEL_PATH)
-    model = GPUMistralV2Model(model_file, rope_interleaved=1)
-    ensure_log_header(model.vram_used_mb, model.cl.total_vram_mb, model.avg_bpw)
+    try:
+        model = GPUMistralV2Model(model_file, rope_interleaved=1)
+        is_gpu = True
+        ensure_log_header(model.vram_used_mb, model.cl.total_vram_mb, model.avg_bpw)
+        engine_tag = f"NATIVE OPENCL GPU: {model.device_name}"
+    except Exception as e:
+        print(f"\n[!] Notice: GPU OpenCL not available ({e}).")
+        print("    Activating Universal High-Performance CPU / ARM NEON Engine...\n")
+        from gsd_lq_cpu_runtime import CPUMistralV2Model
+        model = CPUMistralV2Model(model_file, rope_interleaved=1)
+        is_gpu = False
+        engine_tag = "UNIVERSAL HIGH-SPEED CPU / ARM NEON ENGINE"
 
     print("=" * 84)
-    print("MISTRAL-7B GSD-LQ v2.0 NATIVE OPENCL GPU CHAT (100% END-TO-END ON RX 5600 XT)")
+    print(f"MISTRAL-7B GSD-LQ v2.0 ({engine_tag})")
     print(f"Logging all turns to: {LOG_FILE}")
     print("Commands: type 'reset' to clear chat memory, 'quit' or 'exit' to stop.")
     print("=" * 84)

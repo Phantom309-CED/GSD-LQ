@@ -24,7 +24,7 @@ if %errorlevel% neq 0 (
 
 :: 2. Auto-install required minimal dependencies
 echo [*] Verifying dependencies (numpy, huggingface_hub, gguf)...
-python -m pip install -q -r requirements.txt
+python -m pip install -q --no-warn-script-location -r requirements.txt
 if %errorlevel% neq 0 (
     echo [!] Warning: Automatic package installation encountered an issue. Attempting launch...
 )
