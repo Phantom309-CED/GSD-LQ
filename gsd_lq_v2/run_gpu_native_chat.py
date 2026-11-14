@@ -1119,8 +1119,7 @@ def main():
                 history.clear()
                 cached_tokens.clear()
                 prefix_len = 0
-                print("\n[*] Thinking...", end="", flush=True)
-            full_prompt = format_mistral_prompt(history, user_msg, is_cpu=(not is_gpu))
+                full_prompt = format_mistral_prompt(history, user_msg, is_cpu=(not is_gpu))
                 prompt_ids = model.tokenizer.encode(full_prompt, add_bos=True)
 
             # Prefill new prompt tokens into GPU KV cache
