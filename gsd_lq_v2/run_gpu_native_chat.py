@@ -993,17 +993,23 @@ SYSTEM_RULES = (
 )
 
 
-def format_mistral_prompt(history: list[tuple[str, str]], new_user_msg: str) -> str:
+def format_mistral_prompt(history: list[tuple[str, str]], new_user_msg: str, is_cpu: bool = False) -> str:
     parts = []
-    if not history:
-        parts.append(f"[INST] {SYSTEM_RULES}\n\nUser: {new_user_msg} [/INST]")
-    else:
-        for idx, (u, a) in enumerate(history):
-            if idx == 0:
-                parts.append(f"[INST] {SYSTEM_RULES}\n\nUser: {u} [/INST] {a}</s>")
-            else:
-                parts.append(f"[INST] {u} [/INST] {a}</s>")
+    if is_cpu:
+        # Fast lightweight prompt for mobile CPU
+        for u, a in history:
+            parts.append(f"[INST] {u} [/INST] {a}</s>")
         parts.append(f"[INST] {new_user_msg} [/INST]")
+    else:
+        if not history:
+            parts.append(f"[INST] {SYSTEM_RULES}\n\nUser: {new_user_msg} [/INST]")
+        else:
+            for idx, (u, a) in enumerate(history):
+                if idx == 0:
+                    parts.append(f"[INST] {SYSTEM_RULES}\n\nUser: {u} [/INST] {a}</s>")
+                else:
+                    parts.append(f"[INST] {u} [/INST] {a}</s>")
+            parts.append(f"[INST] {new_user_msg} [/INST]")
     return "".join(parts)
 
 
@@ -1099,7 +1105,8 @@ def main():
             if not user_msg:
                 continue
 
-            full_prompt = format_mistral_prompt(history, user_msg)
+            print("\n[*] Thinking...", end="", flush=True)
+            full_prompt = format_mistral_prompt(history, user_msg, is_cpu=(not is_gpu))
             prompt_ids = model.tokenizer.encode(full_prompt, add_bos=True)
 
             # Reuse KV cache prefix for tokens already evaluated in previous turns
@@ -1112,7 +1119,8 @@ def main():
                 history.clear()
                 cached_tokens.clear()
                 prefix_len = 0
-                full_prompt = format_mistral_prompt(history, user_msg)
+                print("\n[*] Thinking...", end="", flush=True)
+            full_prompt = format_mistral_prompt(history, user_msg, is_cpu=(not is_gpu))
                 prompt_ids = model.tokenizer.encode(full_prompt, add_bos=True)
 
             # Prefill new prompt tokens into GPU KV cache

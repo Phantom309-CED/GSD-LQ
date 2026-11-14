@@ -24,38 +24,44 @@
 #include <omp.h>
 #endif
 
-// Fast IEEE 754 FP16 to FP32 conversion
+// Native compiler FP16 conversion supported by Clang/GCC on ARM and x86
+#if defined(__GNUC__) || defined(__clang__)
+typedef _Float16 gsd_fp16_t;
+static inline float fp16_to_fp32(uint16_t h) {
+    gsd_fp16_t f;
+    memcpy(&f, &h, 2);
+    return (float)f;
+}
+static inline uint16_t fp32_to_fp16(float val) {
+    gsd_fp16_t f = (gsd_fp16_t)val;
+    uint16_t h;
+    memcpy(&h, &f, 2);
+    return h;
+}
+#else
 static inline float fp16_to_fp32(uint16_t h) {
     uint32_t sign = ((uint32_t)(h & 0x8000)) << 16;
     uint32_t exp  = (h >> 10) & 0x1F;
     uint32_t mant = h & 0x3FF;
-
-    if (exp == 0) {
-        if (mant == 0) {
-            uint32_t res = sign;
-            float f;
-            memcpy(&f, &res, 4);
-            return f;
-        }
-        // Subnormal
-        while ((mant & 0x400) == 0) {
-            mant <<= 1;
-            exp--;
-        }
-        exp++;
-        mant &= ~0x400;
-    } else if (exp == 31) {
-        uint32_t res = sign | 0x7F800000 | (mant << 13);
-        float f;
-        memcpy(&f, &res, 4);
-        return f;
-    }
-
+    if (exp == 0) return 0.0f;
+    if (exp == 31) exp = 30; // clamp to prevent inf/nan
     uint32_t res = sign | ((exp + 112) << 23) | (mant << 13);
     float f;
     memcpy(&f, &res, 4);
     return f;
 }
+static inline uint16_t fp32_to_fp16(float val) {
+    float _v = val;
+    uint32_t _i;
+    memcpy(&_i, &_v, 4);
+    uint16_t _sign = (_i >> 16) & 0x8000;
+    int32_t _exp = ((_i >> 23) & 0xFF) - 127 + 15;
+    uint16_t _mant = (_i >> 13) & 0x3FF;
+    if (_exp <= 0) return _sign;
+    if (_exp >= 31) _exp = 30;
+    return _sign | (_exp << 10) | _mant;
+}
+#endif
 
 // 1. RMSNorm
 void gsd_cpu_rmsnorm(
@@ -197,24 +203,9 @@ void gsd_cpu_rope_and_store_kv(
     size_t cache_pos_stride   = (size_t)pos * (size_t)n_kv_heads * (size_t)head_dim;
     size_t cache_base         = (size_t)layer_idx * cache_layer_stride + cache_pos_stride;
 
-    // Fast FP32 to FP16 converter
-    #define FP32_TO_FP16(val) ({ \
-        float _v = (val); \
-        uint32_t _i; \
-        memcpy(&_i, &_v, 4); \
-        uint16_t _sign = (_i >> 16) & 0x8000; \
-        int32_t _exp = ((_i >> 23) & 0xFF) - 127 + 15; \
-        uint16_t _mant = (_i >> 13) & 0x3FF; \
-        uint16_t _h = 0; \
-        if (_exp <= 0) { _h = _sign; } \
-        else if (_exp >= 31) { _h = _sign | 0x7C00; } \
-        else { _h = _sign | (_exp << 10) | _mant; } \
-        _h; \
-    })
-
     // Store V directly
     for (int i = 0; i < n_kv_heads * head_dim; i++) {
-        v_cache[cache_base + i] = FP32_TO_FP16(v[i]);
+        v_cache[cache_base + i] = fp32_to_fp16(v[i]);
     }
 
     // RoPE for Q
@@ -256,15 +247,15 @@ void gsd_cpu_rope_and_store_kv(
                 k1 = k[base + 2 * i + 1];
                 rk0 = k0 * cos_val - k1 * sin_val;
                 rk1 = k0 * sin_val + k1 * cos_val;
-                k_cache[cache_base + base + 2 * i]     = FP32_TO_FP16(rk0);
-                k_cache[cache_base + base + 2 * i + 1] = FP32_TO_FP16(rk1);
+                k_cache[cache_base + base + 2 * i]     = fp32_to_fp16(rk0);
+                k_cache[cache_base + base + 2 * i + 1] = fp32_to_fp16(rk1);
             } else {
                 k0 = k[base + i];
                 k1 = k[base + i + half_d];
                 rk0 = k0 * cos_val - k1 * sin_val;
                 rk1 = k0 * sin_val + k1 * cos_val;
-                k_cache[cache_base + base + i]          = FP32_TO_FP16(rk0);
-                k_cache[cache_base + base + i + half_d] = FP32_TO_FP16(rk1);
+                k_cache[cache_base + base + i]          = fp32_to_fp16(rk0);
+                k_cache[cache_base + base + i + half_d] = fp32_to_fp16(rk1);
             }
         }
     }

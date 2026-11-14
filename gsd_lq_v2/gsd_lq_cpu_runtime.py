@@ -24,8 +24,9 @@ MAX_SEQ_LEN = 2048
 
 def build_c_library() -> str:
     """Compiles gsd_lq_cpu_engine.c into a shared library using available C compiler."""
-    if os.path.exists(LIB_PATH):
-        return LIB_PATH
+    if os.path.exists(LIB_PATH) and os.path.exists(C_SRC):
+        if os.path.getmtime(LIB_PATH) >= os.path.getmtime(C_SRC):
+            return LIB_PATH
 
     compilers = ["clang", "gcc"]
     compiler = None
@@ -413,17 +414,24 @@ class CPUMistralV2Model:
         return self.buf_logits.copy()
 
     def sample_token(self, logits, temperature: float = 0.0, top_p: float = 0.9):
+        logits = np.nan_to_num(logits, nan=-1e4, posinf=100.0, neginf=-1e4)
         if temperature <= 0.0:
             return int(np.argmax(logits))
-        logits = logits / temperature
+        logits = logits / max(temperature, 1e-4)
         logits -= np.max(logits)
         probs = np.exp(logits)
-        probs /= np.sum(probs)
+        s = np.sum(probs)
+        if s <= 0 or np.isnan(s):
+            return int(np.argmax(logits))
+        probs /= s
         sorted_indices = np.argsort(probs)[::-1]
         sorted_probs = probs[sorted_indices]
         cumulative_probs = np.cumsum(sorted_probs)
         cutoff_index = int(np.argmax(cumulative_probs > top_p)) + 1
         top_idx = sorted_indices[:cutoff_index]
         p = sorted_probs[:cutoff_index]
-        p /= np.sum(p)
+        p_sum = np.sum(p)
+        if p_sum <= 0 or np.isnan(p_sum):
+            return int(top_idx[0])
+        p /= p_sum
         return int(np.random.choice(top_idx, p=p))
