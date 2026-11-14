@@ -1154,10 +1154,14 @@ def main():
             gen_s = time.time() - t_gen
             response_text = model.tokenizer.decode(gen_ids).strip()
             tps = len(gen_ids) / max(gen_s, 0.001)
+            engine_label = "GPU" if is_gpu else "ARM CPU"
+            mem_label = "VRAM" if is_gpu else "RAM"
+            vram_cur = getattr(model, "vram_used_mb", 3876.5)
+            vram_tot = getattr(getattr(model, "cl", None), "total_vram_mb", vram_cur)
             print(
-                f"\n\n[GPU Stats: Prefill {new_p_toks} tok ({prefill_s:.2f}s) | "
+                f"\n\n[{engine_label} Stats: Prefill {new_p_toks} tok ({prefill_s:.2f}s) | "
                 f"Gen {len(gen_ids)} tok in {gen_s:.2f}s ({tps:.2f} tok/s) | "
-                f"VRAM: {model.vram_used_mb:.1f} MB / {model.cl.total_vram_mb:.0f} MB]"
+                f"{mem_label}: {vram_cur:.1f} MB / {vram_tot:.0f} MB]"
             )
 
             history.append((user_msg, response_text))
@@ -1169,7 +1173,7 @@ def main():
             print("\nInterrupted. Log saved.")
             break
 
-    model.cl.release_all()
+    if hasattr(model, 'cl') and hasattr(model.cl, 'release_all'): model.cl.release_all()
 
 
 if __name__ == "__main__":

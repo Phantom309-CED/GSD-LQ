@@ -232,6 +232,12 @@ class CPUMistralV2Model:
         self.buf_logits = np.zeros(self.vocab_size, dtype=np.float32)
 
         file_size_mb = os.path.getsize(gsd2_path) / (1024 * 1024)
+        self.vram_used_mb = file_size_mb
+        class _MockCL:
+            total_vram_mb = file_size_mb
+            def release_all(self):
+                pass
+        self.cl = _MockCL()
         print(
             f"[+] GSD-LQ Model Loaded 100% in RAM in {time.time() - t0:.2f}s!\n"
             f"    Unified Memory Footprint: {file_size_mb:.1f} MB ({file_size_mb / 1024:.2f} GB)\n"
